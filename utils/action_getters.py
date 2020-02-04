@@ -32,10 +32,9 @@ class ActionGetter:
 
 class ActionGetterModule(ActionGetter):
 
-    def __init__(self, actor: nn.Module, scaler: nn.Module, activation_function: nn.Module):
+    def __init__(self, actor: nn.Module, scaler: nn.Module):
         self.actor = actor
         self.scaler = scaler
-        self.activation_function = activation_function
 
     def get_action(self, state: np.ndarray) -> np.ndarray:
         """
@@ -46,8 +45,7 @@ class ActionGetterModule(ActionGetter):
             state_tensor = state_tensor.reshape(1, -1)
         state_scaled_tensor = self.scaler.forward(state_tensor)
         action_tensor, _ = self.actor.forward(state_scaled_tensor)
-        action_activated_tensor = self.activation_function.forward(action_tensor)
-        action = action_activated_tensor.detach().numpy()
+        action = action_tensor.detach().numpy()
         if len(state.shape) == 1:
             action = action.reshape(-1)
         return action

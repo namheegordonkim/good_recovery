@@ -71,7 +71,6 @@ class SampleCollectorV0(SampleCollector):
     def collect_samples_by_number(self):
         """
         Collect experience until gathered tuples exceed specified number.
-        Reset after every horizon.
         """
         state_dim, = self.env_container.env.observation_space.shape
         action_dim, = self.env_container.env.action_space.shape
@@ -83,10 +82,8 @@ class SampleCollectorV0(SampleCollector):
         rewards_seq = []
         dones_seq = []
         n_samples_collected = 0
+        self.env_container.envs_reset()
         while n_samples_collected < self.n_samples:
-
-            self.env_container.envs_reset()
-
             for _ in range(self.horizon):
                 states = self.env_container.envs_states
                 actions, log_probs = self.action_getter.sample_action(states)
@@ -131,7 +128,7 @@ def compute_cumulative_rewards(rewards: np.ndarray, dones: np.ndarray, gamma: fl
     """
     done_idxs, = np.where(dones)
     done_idxs = np.concatenate([[-1], done_idxs]).astype(np.int)
-    cumulative_rewards = np.zeros_like(rewards)
+    cumulative_rewards = np.copy(rewards)
     for i, j in zip(done_idxs, done_idxs[1:]):
         rewards_sub = rewards[i + 1:j + 1]
         cumulative_rewards_sub = np.zeros_like(rewards_sub)
@@ -143,7 +140,7 @@ def compute_cumulative_rewards(rewards: np.ndarray, dones: np.ndarray, gamma: fl
 
 
 def compute_cumulative_rewards_mat(rewards: np.ndarray, dones: np.ndarray, gamma: float):
-    cumulative_rewards = np.zeros_like(rewards)
+    cumulative_rewards = np.copy(rewards)
     for i in range(cumulative_rewards.shape[0]):
         cumulative_rewards[i] = compute_cumulative_rewards(rewards[i], dones[i], gamma)
     return cumulative_rewards

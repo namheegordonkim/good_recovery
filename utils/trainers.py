@@ -4,13 +4,18 @@ from typing import List
 import torch
 from tqdm import tqdm
 
-from utils.dicts import ModuleDict, ArrayDict, TensorDict, ArrayKey, TensorKey, ModuleKey
+from utils.dicts import ModuleDict, ArrayDict, TensorDict
 from utils.loss_calculators import LossCalculator
+from utils.module_updaters import ModuleUpdater
 from utils.sample_collectors import SampleCollector
-from utils.tensor_inseter import TensorInserter, TensorInserterTensorize, TensorInserterForward
+from utils.tensor_inseter import TensorInserter
 
 import torch.nn as nn
 import numpy as np
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
 class Trainer:
@@ -25,24 +30,6 @@ class Trainer:
     @abstractmethod
     def train(self, module_dict: ModuleDict):
         raise NotImplementedError
-
-
-class ModuleUpdater:
-
-    @abstractmethod
-    def update_module(self, loss):
-        raise NotImplementedError
-
-
-class ModuleUpdaterOptimizer(ModuleUpdater):
-
-    def __init__(self, optimizer):
-        self.optimizer = optimizer
-
-    def update_module(self, loss):
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
 
 
 class Trainee:
@@ -69,6 +56,7 @@ class RLTrainer(Trainer):
         self.batch_size = batch_size
 
     def train(self, module_dict: ModuleDict):
+        total_rewards = []
         for i in tqdm(range(self.n_cycles)):
             self.train_one_cycle(module_dict)
 
@@ -78,7 +66,7 @@ class RLTrainer(Trainer):
                 env = self.sample_collector.env_container.env
                 action_getter = self.sample_collector.action_getter
                 state = env.reset()
-                for _ in range(200):
+                for _ in range(195):
                     # env.render()
                     action = action_getter.get_action(state)
                     new_state, reward, done, _ = env.step(action)
@@ -87,9 +75,14 @@ class RLTrainer(Trainer):
                     if done:
                         break
                 # env.close()
+                total_rewards.append(total_reward)
                 print("Cycle {:02d}\tReward:{:.2f}".format(i, total_reward))
                 torch.save(module_dict, "./saves/latest.pt")
                 print("Saved to ./saves/latest.pt")
+                plt.figure()
+                plt.plot(total_rewards)
+                plt.savefig("./saves/latest.png")
+                print("Saved to ./saves/latest.png")
 
     def train_one_cycle(self, module_dict: ModuleDict):
         """
@@ -98,9 +91,9 @@ class RLTrainer(Trainer):
         """
         array_dict: ArrayDict = self.sample_collector.collect_samples_by_number()
         n_batches = int(array_dict.n_examples / self.batch_size)
-        all_idxs = np.random.choice(array_dict.n_examples, array_dict.n_examples, replace=False)
         for trainee in self.trainees:
             for epoch in range(trainee.n_epochs):
+                all_idxs = np.random.choice(array_dict.n_examples, array_dict.n_examples, replace=False)
                 batch_idxs = np.array_split(all_idxs, n_batches)
                 tensor_dict: TensorDict = TensorDict()
                 for batch_idx in batch_idxs:

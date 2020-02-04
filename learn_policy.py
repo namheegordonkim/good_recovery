@@ -6,6 +6,7 @@ from gym.vector import AsyncVectorEnv, VectorEnv
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
+from factories import HalfCheetahEnvFactory, FallingEnvFactory
 from radam import RAdam
 from utils.action_getters import ActionGetter, ActionGetterModule
 from utils.dicts import ArrayKey, TensorKey, ModuleKey, ModuleDict
@@ -16,40 +17,17 @@ from utils.tensor_inseter import TensorInserter, TensorInserterTensorize, Tensor
     TensorInserterModuleLambda
 import torch.nn as nn
 
-from utils.trainers import Trainee, RLTrainer, ModuleUpdater, ModuleUpdaterOptimizer
-import gym
+from utils.trainers import Trainee, RLTrainer
+from utils.module_updaters import ModuleUpdater, ModuleUpdaterOptimizer
 import numpy as np
 
-from utils.utils import EnvFactory, EnvContainer
-
-
-class FallingEnvFactory(EnvFactory):
-
-    def make_env(self):
-        return gym.make("Walker2dFalling-v0")
-
-
-class CartPoleEnvFactory(EnvFactory):
-
-    def make_env(self):
-        return gym.make("CartPole-v0")
-
-
-class LunarLanderEnvFactory(EnvFactory):
-
-    def make_env(self):
-        return gym.make("LunarLanderContinuous-v2")
-
-
-class ReacherFactory(EnvFactory):
-
-    def make_env(self):
-        return gym.make("Reacher-v2")
+from utils.utils import EnvContainer
 
 
 def main():
     n_envs = len(os.sched_getaffinity(0))
-    factory = ReacherFactory()
+    # factory = FallingEnvFactory()
+    factory = HalfCheetahEnvFactory()
     env: Env = factory.make_env()
     envs: VectorEnv = AsyncVectorEnv([factory.make_env for _ in range(n_envs)])
     env_container = EnvContainer(env, envs)
@@ -58,9 +36,10 @@ def main():
     action_dim, = env.action_space.shape
     relu = nn.ReLU()
     tanh = nn.Tanh()
+    identity = nn.Identity()
 
-    actor = ProbMLPConstantLogStd(state_dim, action_dim, [256, 256], relu, -2.)
-    critic = MultiLayerPerceptron(state_dim, 1, [256, 256], relu)
+    actor = ProbMLPConstantLogStd(state_dim, action_dim, [256, 256], relu, tanh, -1.0)
+    critic = MultiLayerPerceptron(state_dim, 1, [256, 256], relu, identity)
     scaler_ = StandardScaler()
     print("Fit scaler")
     env.reset()
@@ -80,17 +59,13 @@ def main():
     module_dict.set(ModuleKey.scaler, scaler)
     module_dict.set(ModuleKey.critic, critic)
 
-    action_getter: ActionGetter = ActionGetterModule(actor, scaler, tanh)
-    sample_collector: SampleCollector = SampleCollectorV0(env_container, action_getter, 2048, 195)
+    action_getter: ActionGetter = ActionGetterModule(actor, scaler)
+    sample_collector: SampleCollector = SampleCollectorV0(env_container, action_getter, 9000, 995)
 
     mse_loss = nn.MSELoss()
     critic_tensor_inserter: TensorInserter = \
         TensorInserterTensorize(ArrayKey.states, TensorKey.states_tensor) + \
-        TensorInserterTensorize(ArrayKey.actions, TensorKey.actions_tensor) + \
         TensorInserterTensorize(ArrayKey.log_probs, TensorKey.log_probs_tensor) + \
-        TensorInserterTensorize(ArrayKey.next_states, TensorKey.next_states_tensor) + \
-        TensorInserterTensorize(ArrayKey.rewards, TensorKey.rewards_tensor) + \
-        TensorInserterTensorize(ArrayKey.dones, TensorKey.dones_tensor) + \
         TensorInserterTensorize(ArrayKey.cumulative_rewards, TensorKey.cumulative_rewards_tensor) + \
         TensorInserterForward(TensorKey.states_tensor, ModuleKey.scaler, TensorKey.states_tensor) + \
         TensorInserterForward(TensorKey.states_tensor, ModuleKey.critic, TensorKey.cumulative_reward_predictions_tensor)
@@ -102,9 +77,6 @@ def main():
         TensorInserterTensorize(ArrayKey.states, TensorKey.states_tensor) + \
         TensorInserterTensorize(ArrayKey.actions, TensorKey.actions_tensor) + \
         TensorInserterTensorize(ArrayKey.log_probs, TensorKey.log_probs_tensor) + \
-        TensorInserterTensorize(ArrayKey.next_states, TensorKey.next_states_tensor) + \
-        TensorInserterTensorize(ArrayKey.rewards, TensorKey.rewards_tensor) + \
-        TensorInserterTensorize(ArrayKey.dones, TensorKey.dones_tensor) + \
         TensorInserterTensorize(ArrayKey.cumulative_rewards, TensorKey.cumulative_rewards_tensor) + \
         TensorInserterForward(TensorKey.states_tensor, ModuleKey.scaler, TensorKey.states_tensor) + \
         TensorInserterForward(TensorKey.states_tensor, ModuleKey.critic,
@@ -125,10 +97,10 @@ def main():
     critic_optimizer = RAdam(params=critic.parameters(), lr=3e-4)
     critic_updater: ModuleUpdater = ModuleUpdaterOptimizer(critic_optimizer)
 
-    actor_trainee = Trainee([actor], actor_updater, actor_tensor_inserter, actor_loss_calculator, 20)
-    critic_trainee = Trainee([critic], critic_updater, critic_tensor_inserter, critic_loss_calculator, 20)
+    actor_trainee = Trainee([actor], actor_updater, actor_tensor_inserter, actor_loss_calculator, 10)
+    critic_trainee = Trainee([critic], critic_updater, critic_tensor_inserter, critic_loss_calculator, 10)
 
-    trainer = RLTrainer(sample_collector, [critic_trainee, actor_trainee], 100000, 32)
+    trainer = RLTrainer(sample_collector, [critic_trainee, actor_trainee], 100000, 256)
     trainer.train(module_dict)
 
 

@@ -32,12 +32,13 @@ class ScalerNet(nn.Module):
 
 class MultiLayerPerceptron(nn.Module):
 
-    def __init__(self, input_dim: int, output_dim: int, hidden_dims: List[int], activation_function: nn.Module):
+    def __init__(self, input_dim: int, output_dim: int, hidden_dims: List[int], activation: nn.Module, final_layer_activation: nn.Module):
         super().__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.hidden_dims = hidden_dims
-        self.activation_function: nn.Module = activation_function
+        self.activation: nn.Module = activation
+        self.final_layer_activation = final_layer_activation
         self.fcs: nn.ModuleList = nn.ModuleList()
         layer_dims: np.ndarray = np.array([input_dim, *hidden_dims, output_dim])
         for dim1, dim2 in zip(layer_dims, layer_dims[1:]):
@@ -47,8 +48,9 @@ class MultiLayerPerceptron(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         for fc in self.fcs[:-1]:
             x = fc(x)
-            x = self.activation_function.forward(x)
+            x = self.activation.forward(x)
         x = self.fcs[-1](x)
+        x = self.final_layer_activation(x)
         return x
 
 
@@ -64,10 +66,10 @@ class ProbNet(nn.Module):
 
 class ProbMLPConstantLogStd(ProbNet):
 
-    def __init__(self, input_dim: int, output_dim: int, hidden_dims: List[int], activation_function: nn.Module,
-                 log_std: float):
+    def __init__(self, input_dim: int, output_dim: int, hidden_dims: List[int], activation: nn.Module,
+                 final_layer_activation: nn.Module, log_std: float):
         super().__init__()
-        self.mlp = MultiLayerPerceptron(input_dim, output_dim, hidden_dims, activation_function)
+        self.mlp = MultiLayerPerceptron(input_dim, output_dim, hidden_dims, activation, final_layer_activation)
         self.log_std = log_std  # fixed log_std is superior for exploration
 
     def forward(self, x: torch.Tensor) -> (torch.Tensor, torch.Tensor):

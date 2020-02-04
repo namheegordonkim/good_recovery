@@ -7,12 +7,14 @@ import torch.nn as nn
 from gym import Env
 from gym.vector import VectorEnv
 from sklearn.preprocessing import StandardScaler
+from gym.spaces import Box
 from tqdm import tqdm
 
 from radam import RAdam
 from utils.action_getters import ActionGetter, ActionGetterModule
 from utils.dicts import ArrayDict, ArrayKey, TensorKey, ModuleDict, TensorDict, ModuleKey
 from utils.loss_calculators import LossCalculator, LossCalculatorInputTarget, LossCalculatorLambda
+from utils.module_updaters import ModuleUpdaterOptimizer, ModuleUpdater
 from utils.nets import MultiLayerPerceptron, ProbMLPConstantLogStd, DummyNet, ScalerNet
 from utils.sample_collectors import SampleCollectorV0, SampleCollector, compute_cumulative_rewards, \
     compute_cumulative_rewards_mat
@@ -134,19 +136,71 @@ class TestDicts(TestCase):
 class TestActionGetters(TestCase):
     def setUp(self) -> None:
         self.dummy_states: torch.Tensor = torch.rand([N_EXAMPLES, STATE_DIM]).float()
+        self.dummy_states_scaled: torch.tensor = torch.rand([N_EXAMPLES, STATE_DIM]).float()
+        self.dummy_actions: torch.Tensor = torch.rand([N_EXAMPLES, ACTION_DIM]).float()
+        self.dummy_log_std: torch.tensor = torch.ones([N_EXAMPLES, ACTION_DIM]).float() * -np.infty
+        self.dummy_activations: torch.Tensor = torch.rand([N_EXAMPLES, ACTION_DIM]).float()
 
-    def test_module_action_getter_success(self):
+    def test_module_action_getter_1d_success(self):
         actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION_FUNCTION, LOG_STD)
         scaler: nn.Module = DummyNet()
-        action_getter: ActionGetter = ActionGetterModule(actor, scaler)
+        activation: nn.Module = nn.Tanh()
 
+        action_getter: ActionGetter = ActionGetterModule(actor, scaler)
         dummy_state = self.dummy_states[0, :]
-        dummy_action = action_getter.get_action(dummy_state)
-        self.assertEqual(len(dummy_action.shape), 1, "1D case output shape is not 1D")
+        output_action = action_getter.get_action(dummy_state)
+
+        self.assertEqual(len(output_action.shape), 1, "1D case output shape is not 1D")
+
+    @patch("torch.nn.Module.forward")
+    @patch("torch.nn.Module.forward")
+    @patch("torch.nn.Module.forward")
+    def test_module_action_getter_2d_success(self, actor_forward, scaler_forward, activation_forward):
+        scaler_forward.return_value = self.dummy_states_scaled
+        actor_forward.return_value = (self.dummy_actions, self.dummy_log_std)
+        activation_forward.return_value = self.dummy_activations
+        actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION_FUNCTION, LOG_STD)
+        actor.forward = actor_forward
+        scaler: nn.Module = DummyNet()
+        scaler.forward = scaler_forward
+        activation: nn.Module = nn.Module()
+        activation.forward = activation_forward
+
+        action_getter: ActionGetter = ActionGetterModule(actor, scaler)
 
         dummy_actions = action_getter.get_action(self.dummy_states)
         self.assertEqual(len(dummy_actions.shape), 2, "2D case output shape is not 2D")
         self.assertTupleEqual(dummy_actions.shape, (N_EXAMPLES, ACTION_DIM), "2D case output shape is inconsistent")
+        np.testing.assert_array_almost_equal(dummy_actions, self.dummy_activations)
+
+        scaler_forward.assert_called_once_with(self.dummy_states)
+        actor_forward.assert_called_once_with(self.dummy_states_scaled)
+        activation_forward.assert_called_once_with(self.dummy_actions)
+
+    @patch("torch.nn.Module.forward")
+    @patch("torch.nn.Module.forward")
+    @patch("torch.nn.Module.forward")
+    def test_module_action_getter_sample_success(self, actor_forward, scaler_forward, activation_forward):
+        scaler_forward.return_value = self.dummy_states_scaled
+        actor_forward.return_value = (self.dummy_actions, self.dummy_log_std)
+        activation_forward.return_value = self.dummy_activations
+        actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION_FUNCTION, LOG_STD)
+        actor.forward = actor_forward
+        scaler: nn.Module = DummyNet()
+        scaler.forward = scaler_forward
+        activation: nn.Module = nn.Module()
+        activation.forward = activation_forward
+
+        action_getter: ActionGetter = ActionGetterModule(actor, scaler)
+
+        actions, log_prob = action_getter.sample_action(self.dummy_states)
+        self.assertEqual(len(actions.shape), 2, "2D case output shape is not 2D")
+        self.assertTupleEqual(actions.shape, (N_EXAMPLES, ACTION_DIM), "2D case output shape is inconsistent")
+        np.testing.assert_array_equal(actions, self.dummy_activations)
+
+        np.testing.assert_array_equal(scaler_forward.call_args[0][0], self.dummy_states)
+        np.testing.assert_array_equal(actor_forward.call_args[0][0], self.dummy_states_scaled)
+        np.testing.assert_array_equal(activation_forward.call_args[0][0], self.dummy_actions)
 
 
 class DummyVectorEnv(VectorEnv):
@@ -160,10 +214,6 @@ class DummyVectorEnv(VectorEnv):
         self.num_envs = num_envs
 
 
-@patch('gym.vector.VectorEnv.step')
-@patch('gym.vector.VectorEnv.reset')
-@patch('gym.Env.step')
-@patch('gym.Env.reset')
 class TestSampleCollector(TestCase):
 
     def setUp(self) -> None:
@@ -175,9 +225,15 @@ class TestSampleCollector(TestCase):
         self.dummy_done = False
         self.dummy_dones = np.zeros(N_ENVS, dtype=np.bool)
         self.dummy_info = {}
+        self.dummy_actions: torch.Tensor = torch.rand([N_ENVS, ACTION_DIM]).float()
+        self.dummy_log_probs: torch.Tensor = torch.rand([N_ENVS, ACTION_DIM]).float()
 
-    def test_dummy_env_return_values(self, mock_env_reset, mock_env_step, mock_envs_reset, mock_envs_step) -> None:
+    @patch('gym.Env.step')
+    @patch('gym.Env.reset')
+    def test_dummy_env_return_values(self, mock_env_reset, mock_env_step) -> None:
         dummy_env = Env()
+        dummy_env.observation_space = Box(-1, 1, [STATE_DIM])
+        dummy_env.action_space = Box(-1, 1, [ACTION_DIM])
         mock_env_reset.return_value = self.dummy_state
         mock_env_step.return_value = (self.dummy_state, self.dummy_reward, self.dummy_done, self.dummy_info)
         dummy_env.reset = mock_env_reset
@@ -189,7 +245,9 @@ class TestSampleCollector(TestCase):
         dummy_env.step(dummy_action)
         mock_env_step.assert_called_with(dummy_action)
 
-    def test_dummy_vecenv_return_values(self, mock_env_reset, mock_env_step, mock_envs_reset, mock_envs_step) -> None:
+    @patch('gym.vector.VectorEnv.step')
+    @patch('gym.vector.VectorEnv.reset')
+    def test_dummy_vecenv_return_values(self, mock_envs_reset, mock_envs_step) -> None:
         dummy_envs = DummyVectorEnv(N_ENVS, STATE_DIM, ACTION_DIM)
         mock_envs_reset.return_value = self.dummy_states
         mock_envs_step.return_value = (self.dummy_next_states, self.dummy_rewards, self.dummy_dones, {})
@@ -202,9 +260,15 @@ class TestSampleCollector(TestCase):
         dummy_envs.step(dummy_actions)
         mock_envs_step.assert_called_with(dummy_actions)
 
+    @patch('gym.vector.VectorEnv.step')
+    @patch('gym.vector.VectorEnv.reset')
+    @patch('gym.Env.step')
+    @patch('gym.Env.reset')
     def test_sample_collector_by_horizon_success(self, mock_env_reset, mock_env_step, mock_envs_reset,
                                                  mock_envs_step) -> None:
         dummy_env = Env()
+        dummy_env.observation_space = Box(-1, 1, [STATE_DIM])
+        dummy_env.action_space = Box(-1, 1, [ACTION_DIM])
         mock_env_reset.return_value = self.dummy_state
         mock_env_step.return_value = (self.dummy_state, self.dummy_reward, self.dummy_done, self.dummy_info)
         dummy_env.reset = mock_env_reset
@@ -221,6 +285,7 @@ class TestSampleCollector(TestCase):
 
         actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION_FUNCTION, LOG_STD)
         scaler: nn.Module = DummyNet()
+        tanh: nn.Module = nn.Tanh()
         action_getter: ActionGetter = ActionGetterModule(actor, scaler)
         sample_collector: SampleCollector = SampleCollectorV0(dummy_env_container, action_getter, N_ENVS * 10, 10)
 
@@ -230,9 +295,15 @@ class TestSampleCollector(TestCase):
         collected_states = array_dict.get(ArrayKey.states)
         self.assertTupleEqual(collected_states.shape, (N_ENVS * 10, STATE_DIM))
 
+    @patch('gym.vector.VectorEnv.step')
+    @patch('gym.vector.VectorEnv.reset')
+    @patch('gym.Env.step')
+    @patch('gym.Env.reset')
     def test_sample_collector_by_number_success(self, mock_env_reset, mock_env_step, mock_envs_reset,
                                                 mock_envs_step) -> None:
         dummy_env = Env()
+        dummy_env.observation_space = Box(-1, 1, [STATE_DIM])
+        dummy_env.action_space = Box(-1, 1, [ACTION_DIM])
         mock_env_reset.return_value = self.dummy_state
         mock_env_step.return_value = (self.dummy_state, self.dummy_reward, self.dummy_done, self.dummy_info)
         dummy_env.reset = mock_env_reset
@@ -249,6 +320,7 @@ class TestSampleCollector(TestCase):
 
         actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION_FUNCTION, LOG_STD)
         scaler: nn.Module = DummyNet()
+        tanh: nn.Module = nn.Tanh()
         action_getter: ActionGetter = ActionGetterModule(actor, scaler)
         sample_collector: SampleCollector = SampleCollectorV0(dummy_env_container, action_getter, N_ENVS * 10, 1)
 
@@ -259,8 +331,7 @@ class TestSampleCollector(TestCase):
         collected_states = array_dict.get(ArrayKey.states)
         self.assertTupleEqual(collected_states.shape, (N_ENVS * 10, STATE_DIM))
 
-    def test_cumulative_rewards_no_discount_success(self, mock_env_reset, mock_env_step, mock_envs_reset,
-                                                    mock_envs_step):
+    def test_cumulative_rewards_no_discount_success(self):
         dones = np.array([0, 0, 1, 0, 0, 0, 1])
         rewards = np.array([1, 1, 1, 1, 1, 1, 1]).astype(np.float)
         ans = np.array([2, 1, 0, 3, 2, 1, 0])
@@ -268,8 +339,7 @@ class TestSampleCollector(TestCase):
 
         np.testing.assert_array_equal(cumulative_rewards, ans)
 
-    def test_cumulative_rewards_yes_discount_success(self, mock_env_reset, mock_env_step, mock_envs_reset,
-                                                     mock_envs_step):
+    def test_cumulative_rewards_yes_discount_success(self):
         dones = np.array([0, 0, 1, 0, 0, 0, 1])
         rewards = np.array([1, 1, 1, 1, 1, 1, 1]).astype(np.float)
         ans = np.array([1 + 1. / 2, 1, 0, 1 + 1. / 2 * (1 + 1. / 2), 1 + 1. / 2, 1, 0])
@@ -277,8 +347,7 @@ class TestSampleCollector(TestCase):
 
         np.testing.assert_array_equal(cumulative_rewards, ans)
 
-    def test_cumulative_rewards_mat_success(self, mock_env_reset, mock_env_step, mock_envs_reset,
-                                            mock_envs_step):
+    def test_cumulative_rewards_mat_success(self):
         dones = np.array([
             [0, 0, 1, 0, 0, 0, 1],
             [0, 0, 0, 1, 0, 1, 0]
@@ -294,6 +363,42 @@ class TestSampleCollector(TestCase):
         cumulative_rewards = compute_cumulative_rewards_mat(rewards, dones, 1)
 
         np.testing.assert_array_equal(cumulative_rewards, ans)
+
+    @patch('gym.vector.VectorEnv.step')
+    @patch('gym.vector.VectorEnv.reset')
+    @patch('gym.Env.step')
+    @patch('gym.Env.reset')
+    @patch("utils.action_getters.ActionGetterModule.sample_action")
+    def test_sample_action_success(self, sample_action, mock_env_reset, mock_env_step, mock_envs_reset,
+                                   mock_envs_step):
+        # mock
+        action_getter: ActionGetter = ActionGetter()
+        sample_action.return_value = self.dummy_actions, self.dummy_log_probs
+        action_getter.sample_action = sample_action
+
+        dummy_env = Env()
+        dummy_env.observation_space = Box(-1, 1, [STATE_DIM])
+        dummy_env.action_space = Box(-1, 1, [ACTION_DIM])
+        mock_env_reset.return_value = self.dummy_state
+        mock_env_step.return_value = (self.dummy_state, self.dummy_reward, self.dummy_done, self.dummy_info)
+        dummy_env.reset = mock_env_reset
+        dummy_env.step = mock_env_step
+
+        dummy_envs = DummyVectorEnv(N_ENVS, STATE_DIM, ACTION_DIM)
+        mock_envs_reset.return_value = self.dummy_states
+        mock_envs_step.return_value = (self.dummy_next_states, self.dummy_rewards, self.dummy_dones, {})
+        dummy_envs.reset = mock_envs_reset
+        dummy_envs.step = mock_envs_step
+
+        dummy_env_container: EnvContainer = EnvContainer(dummy_env, dummy_envs)
+
+        # run
+        sample_collector: SampleCollector = SampleCollectorV0(dummy_env_container, action_getter, N_ENVS * 2, 1)
+        sample_collector.collect_samples_by_number()
+
+        # assert
+        self.assertEqual(sample_action.call_count, 2)
+        sample_action.assert_called_with(self.dummy_states)
 
 
 class TestTensorInserter(TestCase):
@@ -319,7 +424,8 @@ class TestTensorInserter(TestCase):
 
         # run
         tensor_inserter: TensorInserter = TensorInserterTensorize(ArrayKey.states, TensorKey.states_tensor, torch.float)
-        tensor_dict = tensor_inserter.insert_tensor(tensor_dict, array_dict, self.dummy_module_dict, np.arange(N_EXAMPLES))
+        tensor_dict = tensor_inserter.insert_tensor(tensor_dict, array_dict, self.dummy_module_dict,
+                                                    np.arange(N_EXAMPLES))
 
         # assert
         array_dict_get.assert_called_once_with(ArrayKey.states)
@@ -488,6 +594,56 @@ class TestLossCalculator(TestCase):
         get_mock.assert_any_call(TensorKey.states_tensor)
         get_mock.assert_any_call(TensorKey.next_states_tensor)
         self.assertEqual(loss, 2)
+
+
+class TestModuleUpdaters(TestCase):
+
+    def setUp(self) -> None:
+        self.dummy_states = np.random.random([N_ENVS, STATE_DIM])
+        self.dummy_states_tensor: torch.Tensor = torch.rand([N_ENVS, STATE_DIM]).float()
+        self.dummy_target_tensor: torch.Tensor = torch.rand([N_ENVS, ACTION_DIM]).float()
+
+    def test_module_updater_optimizer_change_output_success(self) -> None:
+        tanh = nn.Tanh()
+        mse_loss = nn.MSELoss()
+        net = MultiLayerPerceptron(STATE_DIM, ACTION_DIM, [2, 2], tanh)
+        optimizer = RAdam(net.parameters(), lr=3e-4)
+        module_updater: ModuleUpdater = ModuleUpdaterOptimizer(optimizer)
+
+        output1 = net.forward(self.dummy_states_tensor)
+        output2 = net.forward(self.dummy_states_tensor)
+        loss = mse_loss.forward(output1, self.dummy_target_tensor)
+        module_updater.update_module(loss)
+        output3 = net.forward(self.dummy_states_tensor).detach()
+        output1 = output1.detach()
+        output2 = output2.detach()
+        output3 = output3.detach()
+
+        np.testing.assert_array_equal(output1, output2)
+        self.assertFalse(np.array_equal(output1, output3))
+
+    def test_module_updater_optimizer_change_action_success(self) -> None:
+        relu = nn.ReLU()
+        tanh = nn.Tanh()
+        actor = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, [2, 2], relu, -2.0)
+        scaler = DummyNet()
+        action_getter = ActionGetterModule(actor, scaler)
+        optimizer = RAdam(actor.parameters(), lr=3e-4)
+        module_updater: ModuleUpdater = ModuleUpdaterOptimizer(optimizer)
+
+        action1 = action_getter.get_action(self.dummy_states)
+        action2 = action_getter.get_action(self.dummy_states)
+
+        output, log_std = actor.forward(self.dummy_states_tensor)
+        mse_loss = nn.MSELoss()
+        loss = mse_loss.forward(output, self.dummy_target_tensor)
+
+        module_updater.update_module(loss)
+
+        action3 = action_getter.get_action(self.dummy_states)
+
+        np.testing.assert_array_equal(action1, action2)
+        self.assertFalse(np.array_equal(action1, action3))
 
 
 class TestTrainers(TestCase):
