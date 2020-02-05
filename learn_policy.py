@@ -6,7 +6,7 @@ from gym.vector import AsyncVectorEnv, VectorEnv
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
-from factories import HalfCheetahEnvFactory, FallingEnvFactory
+from factories import HalfCheetahEnvFactory, FallingEnvFactory, HumanoidFallingEnvFactory, HumanoidEnvFactory
 from radam import RAdam
 from utils.action_getters import ActionGetter, ActionGetterModule
 from utils.dicts import ArrayKey, TensorKey, ModuleKey, ModuleDict
@@ -26,8 +26,9 @@ from utils.utils import EnvContainer
 
 def main():
     n_envs = len(os.sched_getaffinity(0))
-    # factory = FallingEnvFactory()
-    factory = HalfCheetahEnvFactory()
+    factory = FallingEnvFactory()
+    # factory = HalfCheetahEnvFactory()
+    # factory = HumanoidFallingEnvFactory()
     env: Env = factory.make_env()
     envs: VectorEnv = AsyncVectorEnv([factory.make_env for _ in range(n_envs)])
     env_container = EnvContainer(env, envs)
@@ -60,7 +61,7 @@ def main():
     module_dict.set(ModuleKey.critic, critic)
 
     action_getter: ActionGetter = ActionGetterModule(actor, scaler)
-    sample_collector: SampleCollector = SampleCollectorV0(env_container, action_getter, 9000, 995)
+    sample_collector: SampleCollector = SampleCollectorV0(env_container, action_getter, 2048, 1)
 
     mse_loss = nn.MSELoss()
     critic_tensor_inserter: TensorInserter = \
@@ -100,7 +101,7 @@ def main():
     actor_trainee = Trainee([actor], actor_updater, actor_tensor_inserter, actor_loss_calculator, 10)
     critic_trainee = Trainee([critic], critic_updater, critic_tensor_inserter, critic_loss_calculator, 10)
 
-    trainer = RLTrainer(sample_collector, [critic_trainee, actor_trainee], 100000, 256)
+    trainer = RLTrainer(sample_collector, [critic_trainee, actor_trainee], 100000, 128)
     trainer.train(module_dict)
 
 

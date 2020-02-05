@@ -43,8 +43,8 @@ class ActionGetterModule(ActionGetter):
         state_tensor = torch.as_tensor(state).float()
         if len(state.shape) == 1:
             state_tensor = state_tensor.reshape(1, -1)
-        state_scaled_tensor = self.scaler.forward(state_tensor)
-        action_tensor, _ = self.actor.forward(state_scaled_tensor)
+        state_scaled_tensor = self.scaler.cpu().forward(state_tensor)
+        action_tensor, _ = self.actor.cpu().forward(state_scaled_tensor)
         action = action_tensor.detach().numpy()
         if len(state.shape) == 1:
             action = action.reshape(-1)
@@ -54,8 +54,8 @@ class ActionGetterModule(ActionGetter):
         state_tensor = torch.as_tensor(state).float()
         if len(state.shape) == 1:
             state_tensor = state_tensor.reshape(1, -1)
-        state_scaled_tensor = self.scaler.forward(state_tensor)
-        mu_tensor, log_sigma_tensor = self.actor.forward(state_scaled_tensor)
+        state_scaled_tensor = self.scaler.cpu().forward(state_tensor)
+        mu_tensor, log_sigma_tensor = self.actor.cpu().forward(state_scaled_tensor)
         sigma_tensor = torch.exp(log_sigma_tensor)
         normal_distribution = Normal(mu_tensor, sigma_tensor)
         action_tensor = normal_distribution.sample()

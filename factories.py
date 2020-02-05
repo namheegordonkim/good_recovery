@@ -31,3 +31,15 @@ class HalfCheetahEnvFactory(EnvFactory):
 
     def make_env(self):
         return gym.make("HalfCheetah-v3")
+
+
+class HumanoidEnvFactory(EnvFactory):
+
+    def make_env(self):
+        return gym.make("Humanoid-v2")
+
+
+class HumanoidFallingEnvFactory(EnvFactory):
+
+    def make_env(self):
+        return gym.make("HumanoidFalling-v0")

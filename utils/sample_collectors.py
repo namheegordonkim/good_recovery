@@ -128,10 +128,10 @@ def compute_cumulative_rewards(rewards: np.ndarray, dones: np.ndarray, gamma: fl
     """
     done_idxs, = np.where(dones)
     done_idxs = np.concatenate([[-1], done_idxs]).astype(np.int)
-    cumulative_rewards = np.copy(rewards)
+    cumulative_rewards = np.zeros_like(rewards)
     for i, j in zip(done_idxs, done_idxs[1:]):
         rewards_sub = rewards[i + 1:j + 1]
-        cumulative_rewards_sub = np.zeros_like(rewards_sub)
+        cumulative_rewards_sub = np.copy(rewards_sub)
         for k in np.arange(len(rewards_sub)-2, -1, -1):
             cumulative_rewards_sub[k] = rewards_sub[k] + gamma * cumulative_rewards_sub[k+1]
         cumulative_rewards[i + 1:j + 1] = cumulative_rewards_sub
@@ -140,7 +140,7 @@ def compute_cumulative_rewards(rewards: np.ndarray, dones: np.ndarray, gamma: fl
 
 
 def compute_cumulative_rewards_mat(rewards: np.ndarray, dones: np.ndarray, gamma: float):
-    cumulative_rewards = np.copy(rewards)
+    cumulative_rewards = np.zeros_like(rewards)
     for i in range(cumulative_rewards.shape[0]):
         cumulative_rewards[i] = compute_cumulative_rewards(rewards[i], dones[i], gamma)
     return cumulative_rewards

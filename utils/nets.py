@@ -21,13 +21,16 @@ class ScalerNet(nn.Module):
         self.scaler = scaler
 
     def forward(self, x: torch.Tensor):
-        x_np = x.cpu().detach().numpy()
+        # x_np = x.cpu().detach().numpy()
+        # if len(x.shape) == 1:
+        #     x_np = x_np.reshape(1, -1)
+        input = x[:].cpu()
         if len(x.shape) == 1:
-            x_np = x_np.reshape(1, -1)
-        x_transformed = self.scaler.transform(x_np)
+            input = input.reshape(1, -1)
+        transformed = self.scaler.transform(input)
         if len(x.shape) == 1:
-            x_transformed = x_transformed.reshape(-1)
-        return torch.as_tensor(x_transformed).float()
+            transformed = transformed.reshape(-1)
+        return torch.as_tensor(transformed).float()
 
 
 class MultiLayerPerceptron(nn.Module):

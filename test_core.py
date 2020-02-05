@@ -26,7 +26,8 @@ N_ENVS = 32
 INPUT_DIM = 17
 HIDDEN_DIMS = [256, 256]
 OUTPUT_DIM = 8
-ACTIVATION_FUNCTION = nn.ReLU()
+ACTIVATION = nn.ReLU()
+FINAL_LAYER_ACTIVATION = nn.Identity()
 LOG_STD = 0.7
 N_ITERS = 1000
 
@@ -40,7 +41,7 @@ torch.cuda.manual_seed_all(seed)
 
 
 def create_net() -> nn.Module:
-    net: nn.Module = MultiLayerPerceptron(INPUT_DIM, OUTPUT_DIM, HIDDEN_DIMS, ACTIVATION_FUNCTION)
+    net: nn.Module = MultiLayerPerceptron(INPUT_DIM, OUTPUT_DIM, HIDDEN_DIMS, ACTIVATION, FINAL_LAYER_ACTIVATION)
     return net
 
 
@@ -100,11 +101,11 @@ class TestNets(TestCase):
         self.assertLessEqual(loss.data, 1e-2, "MLP training error for linear data is too high")
 
     def test_prob_mlp_initialization(self) -> None:
-        net: nn.Module = ProbMLPConstantLogStd(INPUT_DIM, OUTPUT_DIM, HIDDEN_DIMS, ACTIVATION_FUNCTION, LOG_STD)
+        net: nn.Module = ProbMLPConstantLogStd(INPUT_DIM, OUTPUT_DIM, HIDDEN_DIMS, ACTIVATION, FINAL_LAYER_ACTIVATION, LOG_STD)
         self.assertTrue(True, "ProbMLP initialized with error.")
 
     def test_prob_mlp_forward(self) -> None:
-        net: nn.Module = ProbMLPConstantLogStd(INPUT_DIM, OUTPUT_DIM, HIDDEN_DIMS, ACTIVATION_FUNCTION, LOG_STD)
+        net: nn.Module = ProbMLPConstantLogStd(INPUT_DIM, OUTPUT_DIM, HIDDEN_DIMS, ACTIVATION, FINAL_LAYER_ACTIVATION, LOG_STD)
         dummy_output = net.forward(self.dummy_features)
         self.assertEqual(len(dummy_output), 2, "ProbMLP output should be two-handed.")
         self.assertEqual(dummy_output[0].shape, (N_EXAMPLES, OUTPUT_DIM), "ProbMLP mu output shape is inconsistent")
@@ -139,10 +140,9 @@ class TestActionGetters(TestCase):
         self.dummy_states_scaled: torch.tensor = torch.rand([N_EXAMPLES, STATE_DIM]).float()
         self.dummy_actions: torch.Tensor = torch.rand([N_EXAMPLES, ACTION_DIM]).float()
         self.dummy_log_std: torch.tensor = torch.ones([N_EXAMPLES, ACTION_DIM]).float() * -np.infty
-        self.dummy_activations: torch.Tensor = torch.rand([N_EXAMPLES, ACTION_DIM]).float()
 
     def test_module_action_getter_1d_success(self):
-        actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION_FUNCTION, LOG_STD)
+        actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION, FINAL_LAYER_ACTIVATION, LOG_STD)
         scaler: nn.Module = DummyNet()
         activation: nn.Module = nn.Tanh()
 
@@ -154,53 +154,43 @@ class TestActionGetters(TestCase):
 
     @patch("torch.nn.Module.forward")
     @patch("torch.nn.Module.forward")
-    @patch("torch.nn.Module.forward")
-    def test_module_action_getter_2d_success(self, actor_forward, scaler_forward, activation_forward):
+    def test_module_action_getter_2d_success(self, actor_forward, scaler_forward):
         scaler_forward.return_value = self.dummy_states_scaled
         actor_forward.return_value = (self.dummy_actions, self.dummy_log_std)
-        activation_forward.return_value = self.dummy_activations
-        actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION_FUNCTION, LOG_STD)
+        actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION, FINAL_LAYER_ACTIVATION, LOG_STD)
         actor.forward = actor_forward
         scaler: nn.Module = DummyNet()
         scaler.forward = scaler_forward
-        activation: nn.Module = nn.Module()
-        activation.forward = activation_forward
 
         action_getter: ActionGetter = ActionGetterModule(actor, scaler)
 
         dummy_actions = action_getter.get_action(self.dummy_states)
         self.assertEqual(len(dummy_actions.shape), 2, "2D case output shape is not 2D")
         self.assertTupleEqual(dummy_actions.shape, (N_EXAMPLES, ACTION_DIM), "2D case output shape is inconsistent")
-        np.testing.assert_array_almost_equal(dummy_actions, self.dummy_activations)
+        np.testing.assert_array_almost_equal(dummy_actions, self.dummy_actions)
 
         scaler_forward.assert_called_once_with(self.dummy_states)
         actor_forward.assert_called_once_with(self.dummy_states_scaled)
-        activation_forward.assert_called_once_with(self.dummy_actions)
 
     @patch("torch.nn.Module.forward")
     @patch("torch.nn.Module.forward")
-    @patch("torch.nn.Module.forward")
-    def test_module_action_getter_sample_success(self, actor_forward, scaler_forward, activation_forward):
+    def test_module_action_getter_sample_success(self, actor_forward, scaler_forward):
         scaler_forward.return_value = self.dummy_states_scaled
         actor_forward.return_value = (self.dummy_actions, self.dummy_log_std)
-        activation_forward.return_value = self.dummy_activations
-        actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION_FUNCTION, LOG_STD)
+        actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION, FINAL_LAYER_ACTIVATION, LOG_STD)
         actor.forward = actor_forward
         scaler: nn.Module = DummyNet()
         scaler.forward = scaler_forward
-        activation: nn.Module = nn.Module()
-        activation.forward = activation_forward
 
         action_getter: ActionGetter = ActionGetterModule(actor, scaler)
 
         actions, log_prob = action_getter.sample_action(self.dummy_states)
         self.assertEqual(len(actions.shape), 2, "2D case output shape is not 2D")
         self.assertTupleEqual(actions.shape, (N_EXAMPLES, ACTION_DIM), "2D case output shape is inconsistent")
-        np.testing.assert_array_equal(actions, self.dummy_activations)
+        np.testing.assert_array_equal(actions, self.dummy_actions)
 
         np.testing.assert_array_equal(scaler_forward.call_args[0][0], self.dummy_states)
         np.testing.assert_array_equal(actor_forward.call_args[0][0], self.dummy_states_scaled)
-        np.testing.assert_array_equal(activation_forward.call_args[0][0], self.dummy_actions)
 
 
 class DummyVectorEnv(VectorEnv):
@@ -283,7 +273,7 @@ class TestSampleCollector(TestCase):
         dummy_env_container = EnvContainer(dummy_env, dummy_envs)
         mock_envs_reset.assert_called_once_with()  # __init__ of EnvContainer calls reset
 
-        actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION_FUNCTION, LOG_STD)
+        actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION, FINAL_LAYER_ACTIVATION, LOG_STD)
         scaler: nn.Module = DummyNet()
         tanh: nn.Module = nn.Tanh()
         action_getter: ActionGetter = ActionGetterModule(actor, scaler)
@@ -318,14 +308,14 @@ class TestSampleCollector(TestCase):
         dummy_env_container = EnvContainer(dummy_env, dummy_envs)
         mock_envs_reset.assert_called_once_with()  # __init__ of EnvContainer calls reset
 
-        actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION_FUNCTION, LOG_STD)
+        actor: nn.Module = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION, FINAL_LAYER_ACTIVATION, LOG_STD)
         scaler: nn.Module = DummyNet()
         tanh: nn.Module = nn.Tanh()
         action_getter: ActionGetter = ActionGetterModule(actor, scaler)
         sample_collector: SampleCollector = SampleCollectorV0(dummy_env_container, action_getter, N_ENVS * 10, 1)
 
         array_dict: ArrayDict = sample_collector.collect_samples_by_number()
-        self.assertEqual(mock_envs_reset.call_count, 11)
+        self.assertEqual(mock_envs_reset.call_count, 2)
         self.assertEqual(mock_envs_step.call_count, 10)
 
         collected_states = array_dict.get(ArrayKey.states)
@@ -334,7 +324,7 @@ class TestSampleCollector(TestCase):
     def test_cumulative_rewards_no_discount_success(self):
         dones = np.array([0, 0, 1, 0, 0, 0, 1])
         rewards = np.array([1, 1, 1, 1, 1, 1, 1]).astype(np.float)
-        ans = np.array([2, 1, 0, 3, 2, 1, 0])
+        ans = np.array([3, 2, 1, 4, 3, 2, 1])
         cumulative_rewards = compute_cumulative_rewards(rewards, dones, 1)
 
         np.testing.assert_array_equal(cumulative_rewards, ans)
@@ -342,7 +332,7 @@ class TestSampleCollector(TestCase):
     def test_cumulative_rewards_yes_discount_success(self):
         dones = np.array([0, 0, 1, 0, 0, 0, 1])
         rewards = np.array([1, 1, 1, 1, 1, 1, 1]).astype(np.float)
-        ans = np.array([1 + 1. / 2, 1, 0, 1 + 1. / 2 * (1 + 1. / 2), 1 + 1. / 2, 1, 0])
+        ans = np.array([1 + 1. / 2 * (1 + 1. / 2), 1 + 1. / 2, 1, 1 + 1. / 2 * (1 + 1. / 2 * (1 + 1. / 2)),1 + 1. / 2 * (1 + 1. / 2), 1 + 1. / 2, 1])
         cumulative_rewards = compute_cumulative_rewards(rewards, dones, 0.5)
 
         np.testing.assert_array_equal(cumulative_rewards, ans)
@@ -357,8 +347,8 @@ class TestSampleCollector(TestCase):
             [1, 1, 1, 1, 1, 1, 1]
         ])
         ans = np.array([
-            [2, 1, 0, 3, 2, 1, 0],
-            [3, 2, 1, 0, 1, 0, 0]
+            [3, 2, 1, 4, 3, 2, 1],
+            [4, 3, 2, 1, 2, 1, 0]
         ])
         cumulative_rewards = compute_cumulative_rewards_mat(rewards, dones, 1)
 
@@ -398,7 +388,8 @@ class TestSampleCollector(TestCase):
 
         # assert
         self.assertEqual(sample_action.call_count, 2)
-        sample_action.assert_called_with(self.dummy_states)
+        np.testing.assert_array_equal(sample_action.call_args_list[0][0][0], self.dummy_states)
+        np.testing.assert_array_equal(sample_action.call_args_list[1][0][0], self.dummy_next_states)
 
 
 class TestTensorInserter(TestCase):
@@ -606,7 +597,7 @@ class TestModuleUpdaters(TestCase):
     def test_module_updater_optimizer_change_output_success(self) -> None:
         tanh = nn.Tanh()
         mse_loss = nn.MSELoss()
-        net = MultiLayerPerceptron(STATE_DIM, ACTION_DIM, [2, 2], tanh)
+        net = MultiLayerPerceptron(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION, FINAL_LAYER_ACTIVATION)
         optimizer = RAdam(net.parameters(), lr=3e-4)
         module_updater: ModuleUpdater = ModuleUpdaterOptimizer(optimizer)
 
@@ -625,7 +616,7 @@ class TestModuleUpdaters(TestCase):
     def test_module_updater_optimizer_change_action_success(self) -> None:
         relu = nn.ReLU()
         tanh = nn.Tanh()
-        actor = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, [2, 2], relu, -2.0)
+        actor = ProbMLPConstantLogStd(STATE_DIM, ACTION_DIM, HIDDEN_DIMS, ACTIVATION, FINAL_LAYER_ACTIVATION, LOG_STD)
         scaler = DummyNet()
         action_getter = ActionGetterModule(actor, scaler)
         optimizer = RAdam(actor.parameters(), lr=3e-4)

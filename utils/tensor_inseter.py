@@ -5,6 +5,7 @@ import torch
 import numpy as np
 
 from utils.dicts import TensorDict, ArrayDict, TensorKey, ArrayKey, ModuleDict, ModuleKey
+from utils.utils import device
 
 
 class TensorInserter:
@@ -52,7 +53,7 @@ class TensorInserterTensorize(TensorInserter):
     def insert_tensor(self, tensor_dict: TensorDict, array_dict: ArrayDict, module_dict: ModuleDict,
                       batch_idx: np.ndarray):
         array = array_dict.get(self.array_key)[batch_idx]
-        tensor = torch.as_tensor(array, dtype=self.dtype)
+        tensor = torch.as_tensor(array, dtype=self.dtype).to(device)
         if len(tensor.shape) == 1:
             tensor = tensor.reshape(-1, 1)
         tensor_dict.set(self.tensor_key, tensor)
@@ -68,8 +69,8 @@ class TensorInserterForward(TensorInserter):
 
     def insert_tensor(self, tensor_dict: TensorDict, array_dict: ArrayDict, module_dict: ModuleDict,
                       batch_idx: np.ndarray):
-        source_tensor = tensor_dict.get(self.source_key)
-        module = module_dict.get(self.module_key)
+        source_tensor = tensor_dict.get(self.source_key).to(device)
+        module = module_dict.get(self.module_key).to(device)
         target_tensor = module.forward(source_tensor)
         tensor_dict.set(self.target_key, target_tensor)
         return tensor_dict
@@ -87,7 +88,7 @@ class TensorInserterLambda(TensorInserter):
 
     def insert_tensor(self, tensor_dict: TensorDict, array_dict: ArrayDict, module_dict: ModuleDict,
                       batch_idx: np.ndarray):
-        input_tensors = [tensor_dict.get(k) for k in self.source_keys]
+        input_tensors = [tensor_dict.get(k).to(device) for k in self.source_keys]
         output_tensor = self.f(*input_tensors)
         tensor_dict.set(self.target_key, output_tensor)
         return tensor_dict
@@ -106,8 +107,8 @@ class TensorInserterModuleLambda(TensorInserter):
 
     def insert_tensor(self, tensor_dict: TensorDict, array_dict: ArrayDict, module_dict: ModuleDict,
                       batch_idx: np.ndarray):
-        module = module_dict.get(self.module_key)
-        input_tensors = [tensor_dict.get(k) for k in self.source_keys]
+        module = module_dict.get(self.module_key).to(device)
+        input_tensors = [tensor_dict.get(k).to(device) for k in self.source_keys]
         output_tensor = self.f(module, *input_tensors)
         tensor_dict.set(self.target_key, output_tensor)
         return tensor_dict
